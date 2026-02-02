@@ -22,5 +22,6 @@ readme = "README.md"
 Homepage = "https://github.com/FoamScience/tree-sitter-xonsh"
 
 [tool.cibuildwheel]
-build = "cp38-*"
+build = "cp38-* cp39-* cp310-* cp311-* cp312-*"
+skip = "*-musllinux_* pp*"
 build-frontend = "build"
