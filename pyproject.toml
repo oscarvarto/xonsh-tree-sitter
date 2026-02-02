@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=42", "wheel", "tree-sitter~=0.21"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,9 +20,6 @@ readme = "README.md"
 
 [project.urls]
 Homepage = "https://github.com/FoamScience/tree-sitter-xonsh"
-
-[project.optional-dependencies]
-core = ["tree-sitter~=0.21"]
 
 [tool.cibuildwheel]
 build = "cp38-*"

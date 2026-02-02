@@ -1,0 +1,5 @@
+include src/parser.c
+include src/scanner.c
+recursive-include src/tree_sitter *.h
+include bindings/python/tree_sitter_xonsh/binding.c
+recursive-include queries *.scm
