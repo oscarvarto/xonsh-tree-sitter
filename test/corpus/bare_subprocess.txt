@@ -681,3 +681,45 @@ x, y
     (identifier)
     (identifier)))
 
+================================================================================
+Bare subprocess - numeric arguments
+================================================================================
+
+cmd 1 2 3
+
+---
+
+(module
+  (bare_subprocess
+    body: (subprocess_body
+      (subprocess_command
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))))))
+
+================================================================================
+Bare subprocess - mixed word and numeric arguments
+================================================================================
+
+cmd hello 42 world
+
+---
+
+(module
+  (bare_subprocess
+    body: (subprocess_body
+      (subprocess_command
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))
+        (subprocess_argument
+          (subprocess_word))))))
+
