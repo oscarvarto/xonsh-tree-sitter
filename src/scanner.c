@@ -36,6 +36,10 @@ enum TokenType {
     KEYWORD_OR,       // 'or' keyword
     // subprocess macro: identifier! args
     SUBPROCESS_MACRO_START,
+    // block macro: with!
+    BLOCK_MACRO_START,
+    // path string prefix: p, pf, pr, P, PF, PR (only when followed by quote)
+    PATH_PREFIX,
 };
 
 typedef enum {
@@ -146,7 +150,10 @@ static const char *python_keywords[] = {
     "def", "class", "if", "elif", "else", "for", "while", "try", "except",
     "finally", "with", "import", "from", "return", "yield", "raise", "pass",
     "break", "continue", "del", "global", "nonlocal", "assert", "lambda",
-    "async", "await", "match", "case", "type", NULL
+    "async", "await", "match", "case", "type",
+    // Xonsh reserved words (prevent subprocess detection)
+    "xontrib",
+    NULL
 };
 
 /**
@@ -216,6 +223,8 @@ typedef enum {
     DETECT_SUBPROCESS,        // Bare subprocess (ls -la, cd /tmp, etc.)
     DETECT_SUBPROCESS_MACRO,  // Subprocess macro (echo! "Hello!")
     DETECT_STRING,            // String literal (f"...", b"...", etc.) - already consumed prefix
+    DETECT_BLOCK_MACRO,       // Block macro (with! Context():)
+    DETECT_PATH_PREFIX,       // Path string prefix (p"...", pf"...", etc.) - already consumed prefix
 } DetectResult;
 
 /**
@@ -405,6 +414,14 @@ static DetectResult detect_subprocess_line(TSLexer *lexer, size_t *subprocess_ma
                 }
                 return DETECT_STRING;  // String with prefix already consumed
             }
+
+            // Check if it's a path prefix (p, pf, pr — case insensitive)
+            if ((ident_len == 1 && (first_ident[0] == 'p' || first_ident[0] == 'P')) ||
+                (ident_len == 2 && (first_ident[0] == 'p' || first_ident[0] == 'P') &&
+                 (first_ident[1] == 'f' || first_ident[1] == 'F' ||
+                  first_ident[1] == 'r' || first_ident[1] == 'R'))) {
+                return DETECT_PATH_PREFIX;
+            }
         }
 
         // Check for help expression: identifier? or identifier??
@@ -436,17 +453,18 @@ static DetectResult detect_subprocess_line(TSLexer *lexer, size_t *subprocess_ma
             advance(lexer);
             pos++;
             if (is_whitespace(lexer->lookahead)) {
-                // "with!" is a block macro, not subprocess macro
-                if (!(ident_len == 4 && strncmp(first_ident, "with", 4) == 0)) {
-                    // Skip the whitespace
-                    while (is_whitespace(lexer->lookahead)) {
-                        advance(lexer);
-                        pos++;
-                    }
-                    // This is a subprocess macro
-                    *subprocess_macro_end = pos;
-                    return DETECT_SUBPROCESS_MACRO;
+                // "with!" is a block macro
+                if (ident_len == 4 && strncmp(first_ident, "with", 4) == 0) {
+                    return DETECT_BLOCK_MACRO;
                 }
+                // Skip the whitespace
+                while (is_whitespace(lexer->lookahead)) {
+                    advance(lexer);
+                    pos++;
+                }
+                // This is a subprocess macro
+                *subprocess_macro_end = pos;
+                return DETECT_SUBPROCESS_MACRO;
             }
         }
     }
@@ -688,6 +706,7 @@ static DetectResult detect_subprocess_line(TSLexer *lexer, size_t *subprocess_ma
             while (is_identifier_char(lexer->lookahead)) {
                 advance(lexer);
             }
+
             prev_was_ident_no_space = true;
             continue;
         }
@@ -741,7 +760,7 @@ static DetectResult detect_subprocess_line(TSLexer *lexer, size_t *subprocess_ma
             continue;
         }
 
-        // Any other character
+        // Any other character (operators, punctuation, etc.)
         prev_was_ident_no_space = false;
         prev_was_space = false;
         advance(lexer);
@@ -1066,7 +1085,8 @@ bool tree_sitter_xonsh_external_scanner_scan(void *payload, TSLexer *lexer, cons
 
     // Check for subprocess macro AND bare subprocess
     // Both checks use detect_subprocess_line which can return either type
-    bool check_subprocess = (valid_symbols[SUBPROCESS_START] || valid_symbols[SUBPROCESS_MACRO_START]) &&
+    bool check_subprocess = (valid_symbols[SUBPROCESS_START] || valid_symbols[SUBPROCESS_MACRO_START] ||
+                             valid_symbols[BLOCK_MACRO_START]) &&
                             !within_brackets && !error_recovery_mode &&
                             first_comment_indent_length == -1 &&
                             lexer->lookahead != '#' &&
@@ -1077,6 +1097,13 @@ bool tree_sitter_xonsh_external_scanner_scan(void *payload, TSLexer *lexer, cons
         Delimiter string_delim = new_delimiter();
         DetectResult result = detect_subprocess_line(lexer, &subprocess_macro_end, &string_delim);
 
+        if (result == DETECT_BLOCK_MACRO && valid_symbols[BLOCK_MACRO_START]) {
+            // Mark the token end to include "with!"
+            lexer->mark_end(lexer);
+            lexer->result_symbol = BLOCK_MACRO_START;
+            return true;
+        }
+
         if (result == DETECT_SUBPROCESS_MACRO && valid_symbols[SUBPROCESS_MACRO_START]) {
             // Mark the token end to include "identifier! "
             lexer->mark_end(lexer);
@@ -1086,6 +1113,14 @@ bool tree_sitter_xonsh_external_scanner_scan(void *payload, TSLexer *lexer, cons
 
         if (result == DETECT_SUBPROCESS && valid_symbols[SUBPROCESS_START]) {
             lexer->result_symbol = SUBPROCESS_START;
+            return true;
+        }
+
+        // Handle path prefix detected by subprocess scanner
+        // The prefix chars were already consumed, lexer is now at the quote
+        if (result == DETECT_PATH_PREFIX && valid_symbols[PATH_PREFIX]) {
+            lexer->mark_end(lexer);
+            lexer->result_symbol = PATH_PREFIX;
             return true;
         }
 
@@ -1125,6 +1160,32 @@ bool tree_sitter_xonsh_external_scanner_scan(void *payload, TSLexer *lexer, cons
                 scanner->inside_f_string = is_format(&string_delim);
                 return true;
             }
+        }
+    }
+
+    // Path prefix detection: p, pf, pr, P, PF, PR immediately followed by a quote.
+    // Must be checked BEFORE STRING_START so the prefix is emitted as PATH_PREFIX
+    // and not consumed as part of a string prefix.
+    if (first_comment_indent_length == -1 && valid_symbols[PATH_PREFIX]) {
+        if (lexer->lookahead == 'p' || lexer->lookahead == 'P') {
+            advance(lexer);
+            if (lexer->lookahead == '\'' || lexer->lookahead == '"') {
+                // p"..." or P"..."
+                lexer->mark_end(lexer);
+                lexer->result_symbol = PATH_PREFIX;
+                return true;
+            } else if ((lexer->lookahead == 'f' || lexer->lookahead == 'F' ||
+                        lexer->lookahead == 'r' || lexer->lookahead == 'R')) {
+                advance(lexer);
+                if (lexer->lookahead == '\'' || lexer->lookahead == '"') {
+                    // pf"...", pr"...", PF"...", PR"..."
+                    lexer->mark_end(lexer);
+                    lexer->result_symbol = PATH_PREFIX;
+                    return true;
+                }
+            }
+            // Not a path prefix — don't consume, let tokenizer handle as identifier
+            return false;
         }
     }
 

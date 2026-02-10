@@ -23,6 +23,8 @@ module.exports = grammar(Python, {
     $._keyword_and,       // 'and' keyword in subprocess context
     $._keyword_or,        // 'or' keyword in subprocess context
     $._subprocess_macro_start,  // Subprocess macro: identifier! (consumed by scanner)
+    $._block_macro_start,      // Block macro: with! (consumed by scanner)
+    $._path_prefix,            // Path string prefix: p/pf/pr/P/PF/PR (only when followed by quote)
   ]),
 
   rules: {
@@ -173,7 +175,7 @@ module.exports = grammar(Python, {
     // Path Literals
     // Xonsh path prefixes: p (basic), pf (formatted), pr (raw)
     path_string: $ => seq(
-      field('prefix', alias(choice('p', 'pf', 'pr', 'P', 'PF', 'PR'), $.path_prefix)),
+      field('prefix', alias($._path_prefix, $.path_prefix)),
       field('string', $.string),
     ),
 
@@ -235,7 +237,8 @@ module.exports = grammar(Python, {
     // Use token() with high precedence to prevent ! from being leaked as a separate token by other rules
     // Allows backslash escapes (e.g., \; \$ \space)
     // Allows @ in middle of words (e.g., user@host in URLs) but not at word start
-    subprocess_word: _ => token(prec(100, /([^\s$@`'"()\[\]{}|<>&;#\\](@[^\s$`'"()\[\]{}|<>&;#\\]+)?|\\[^\n])+/)),
+    // Second char class also excludes @ so that @( in URLs like host/@(var) starts python_evaluation
+    subprocess_word: _ => token(prec(100, /([^\s$@`'"()\[\]{}|<>&;#\\](@[^\s$@`'"()\[\]{}|<>&;#\\]+)?|\\[^\n])+/)),
 
     subprocess_pipeline: $ => seq(
       $.pipe_operator,
@@ -360,9 +363,9 @@ module.exports = grammar(Python, {
     )),
 
     // Block Macro: with! Context() as var:
-    // Captures block content as string for macro processing
+    // The _block_macro_start token is emitted by the scanner after consuming "with!"
     block_macro_statement: $ => prec(20, seq(
-      token('with!'),
+      $._block_macro_start,
       field('context', $.expression),
       optional(seq('as', field('alias', prec(20, $.identifier)))),
       ':',

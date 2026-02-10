@@ -300,9 +300,11 @@
 ; Block Macro (with! Context():)
 ; ===========================================================================
 
-; Block macro uses with! syntax (single token)
+; Block macro "with!" is consumed by the external scanner (_block_macro_start)
+; Highlight the block_macro_statement context and alias instead
 (block_macro_statement
-  "with!" @keyword)
+  context: (_) @type
+  alias: (identifier) @variable)
 
 ; ===========================================================================
 ; Help Expressions
